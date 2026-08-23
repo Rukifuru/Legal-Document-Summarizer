@@ -123,7 +123,22 @@ def extract_text_from_pdf(uploaded_file) -> str:
     return "\n".join(text_chunks)
 
 
-def summarize_chunk(chunk_text: str, num_beams: int = 3) -> str:
+def trim_to_last_sentence(text) -> str:
+    """If decoding ends mid-sentence, trim back to the last full stop."""
+    # Ensure we have a single string
+    if isinstance(text, (list, tuple)):
+        text = text[0] if len(text) > 0 else ""
+    text = str(text)
+
+    if text.endswith((".", "!", "?")):
+        return text
+    last_period = max(text.rfind("."), text.rfind("!"), text.rfind("?"))
+    if last_period != -1 and last_period > len(text) * 0.5:
+        return text[: last_period + 1]
+    return text
+
+
+def summarize_chunk(chunk_text: str, num_beams: int = 4) -> str:
     """Summarize a single chunk of text using the fine-tuned T5 model."""
     input_text = "summarize: " + chunk_text
     inputs = tokenizer(
@@ -132,16 +147,17 @@ def summarize_chunk(chunk_text: str, num_beams: int = 3) -> str:
     with torch.no_grad():
         summary_ids = model.generate(
             inputs["input_ids"],
-            max_length=96,
-            min_length=25,
+            max_length=160,
+            min_length=30,
             num_beams=num_beams,
             early_stopping=True,
             no_repeat_ngram_size=3,
-            length_penalty=3.0,
+            length_penalty=1.2,
             repetition_penalty=1.5,
             do_sample=False,
         )
-    return tokenizer.decode(summary_ids[0], skip_special_tokens=True)
+    decoded = tokenizer.decode(summary_ids[0], skip_special_tokens=True)
+    return trim_to_last_sentence(decoded)
 
 
 def summarize_full_document(cleaned_text: str, num_beams: int = 4) -> tuple:

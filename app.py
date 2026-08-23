@@ -32,8 +32,8 @@ MODEL_DIR = "model"          # fine-tuned checkpoint; falls back to base t5-smal
 MAX_INPUT_LEN = 512          # T5-small's native context window
 MAX_TARGET_LEN = 128
 DEFAULT_TEST_PATH = "data/test.csv"
-CHUNK_SIZE_WORDS = 450       # slightly under 512 tokens to leave margin for subword tokenization
-CHUNK_OVERLAP_WORDS = 50     # overlap between consecutive chunks to preserve context across boundaries
+CHUNK_SIZE_WORDS = 400       # slightly under 512 tokens to leave margin for subword tokenization
+CHUNK_OVERLAP_WORDS = 0     # overlap between consecutive chunks to preserve context across boundaries
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -75,24 +75,29 @@ def clean_text(text: str) -> str:
     return text.strip()
 
 
-def chunk_text(text: str, chunk_size: int = CHUNK_SIZE_WORDS, overlap: int = CHUNK_OVERLAP_WORDS) -> list:
+def chunk_text(text: str, max_words: int = 400) -> list[str]:
     """
-    Split long text into overlapping word-based chunks.
-    Each chunk is ~chunk_size words, with 'overlap' words shared with the next chunk.
+    Split text at sentence boundaries. No sentence is cut in half,
+    which prevents incomplete clauses at chunk boundaries.
     """
-    words = text.split()
-    if len(words) <= chunk_size:
-        return [" ".join(words)]
-
+    sentences = sent_tokenize(text)
     chunks = []
-    start = 0
-    while start < len(words):
-        end = start + chunk_size
-        chunk_words = words[start:end]
-        chunks.append(" ".join(chunk_words))
-        if end >= len(words):
-            break
-        start = end - overlap
+    current_chunk = []
+    current_words = 0
+
+    for sentence in sentences:
+        sentence_words = len(sentence.split())
+
+        if current_chunk and current_words + sentence_words > max_words:
+            chunks.append(" ".join(current_chunk))
+            current_chunk = []
+            current_words = 0
+
+        current_chunk.append(sentence)
+        current_words += sentence_words
+
+    if current_chunk:
+        chunks.append(" ".join(current_chunk))
 
     return chunks
 
@@ -130,8 +135,8 @@ def summarize_chunk(chunk_text: str, num_beams: int = 3) -> str:
     with torch.no_grad():
         summary_ids = model.generate(
             inputs["input_ids"],
-            max_length=80,              # reduced from 128 to force conciseness
-            min_length=30,              # prevent overly short outputs
+            max_length=96,              # reduced from 128 to force conciseness
+            min_length=25,              # prevent overly short outputs
             num_beams=num_beams,
             early_stopping=True,
             no_repeat_ngram_size=3,     # prevents 3-gram repetition
@@ -155,6 +160,7 @@ def summarize_full_document(cleaned_text: str, num_beams: int = 4) -> tuple:
         chunk_summaries.append(chunk_sum)
 
     full_summary = " ".join(chunk_summaries)
+    full_summary = re.sub(r"\s+", " ", full_summary).strip()
     return full_summary, chunk_summaries, len(chunks)
 
 
